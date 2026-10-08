@@ -15,7 +15,6 @@ code/polyreg.py           polynomial features (Legendre/monomial), ridge path, l
 code/train.py             model selection (degree, penalty) with cross-validation; saves models + CV logs
 code/predict.py           inference: writes predictions/<ROLLNO>_pred_var{1,2}.csv
 code/make_figures.py      figures used in the report
-code/make_report.py       builds report/BT2024154_report.pdf
 models/                   trained models (pickle)
 results/                  CV logs (json), out-of-fold predictions, figures
 predictions/              final prediction files
@@ -32,7 +31,6 @@ pip install -r requirements.txt
 python code/train.py            # ~5-10 min on a laptop CPU
 python code/predict.py          # writes predictions/
 python code/make_figures.py
-python code/make_report.py      # optional: rebuild the PDF
 ```
 
 All randomness (CV fold splits) is seeded, so results are deterministic.

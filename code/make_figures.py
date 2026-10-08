@@ -71,7 +71,36 @@ def parity():
     fig.savefig(os.path.join(RES, "fig_parity.png"))
 
 
+def residuals():
+    """Out-of-fold residuals (actual - predicted): against the prediction, and their distribution."""
+    fig, axes = plt.subplots(2, 2, figsize=(7.2, 4.8), gridspec_kw=dict(width_ratios=(1.35, 1)))
+    for row, var in zip(axes, ("var1", "var2")):
+        yo = np.load(os.path.join(RES, f"{var}_oof.npy"))
+        y, p = yo[:, 0], yo[:, 1]
+        r = y - p
+        ax = row[0]
+        ax.axhline(0, color=INK2, lw=1, ls="--")
+        ax.scatter(p, r, s=9, color=BLUE, alpha=0.55, edgecolors="none")
+        ax.set_xlabel("Predicted y")
+        ax.set_ylabel("Actual − predicted")
+        ax.set_title(f"{var}: residuals vs prediction", loc="left", fontweight="bold")
+        m = np.abs(r).max() * 1.08
+        ax.set_ylim(-m, m)
+        ax = row[1]
+        ax.hist(r, bins=30, color=BLUE, edgecolor="white", linewidth=0.6)
+        ax.axvline(0, color=INK2, lw=1, ls="--")
+        ax.set_xlabel("Residual")
+        ax.set_ylabel("Rows")
+        ax.set_title(f"{var}: residual distribution", loc="left", fontweight="bold")
+        ax.text(0.03, 0.97, f"mean = {r.mean():+.3f}\nsd = {r.std():.3f}",
+                transform=ax.transAxes, va="top", color=INK)
+        ax.grid(axis="x", visible=False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(RES, "fig_residuals.png"))
+
+
 if __name__ == "__main__":
     degree_curves()
     parity()
+    residuals()
     print("figures written to", RES)
