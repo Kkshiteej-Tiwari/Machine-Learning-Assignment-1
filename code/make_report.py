@@ -25,6 +25,19 @@ def lasso(v, d, g):
     return next(r for r in L[v]["lasso"] if r["degree"] == d and r["gamma"] == g)
 
 
+def best_of(v, method, **kw):
+    rows = [r for r in L[v][method] if all(r[k] == x for k, x in kw.items())]
+    return min(rows, key=lambda r: r["cv_wmse"])
+
+
+def mname(b, short=False):
+    """Human-readable name of a selected model, e.g. 'elastic net &gamma;=4, &rho;=0.5'."""
+    if b["method"] == "enet":
+        return (f"elastic net, &gamma;={b['gamma']}, &rho;={b['l1_ratio']}" if not short
+                else f"elastic net &gamma;={b['gamma']}")
+    return f"{'Lasso' if b['method'] == 'lasso' else 'ridge'}, &gamma;={b['gamma']}" if not short         else f"{b['method']} &gamma;={b['gamma']}"
+
+
 def r2(v, mse):
     return 1 - mse / L[v]["var_y"]
 
@@ -131,7 +144,7 @@ story += [P("3. Approach", h1),
           P("3.2 Regularisation", h2),
           P("A degree-d polynomial with hundreds or thousands of terms fitted to 800 rows (one CV fold) "
             "overfits without a penalty. With d=6 for var1 there are more terms (924) than rows, so the "
-            "training error drops to 0 while the CV error explodes (Figure 1). Two penalised estimators were used:"),
+            "training error drops to 0 while the CV error explodes (Figure 1). Three penalised estimators were used:"),
           P("&bull; <b>Ridge (L2)</b>, min ||y &minus; &Phi;c||&sup2; + &alpha;||c||&sup2;, with an unpenalised "
             "intercept. It is solved through one SVD of the centred design matrix per fold, which gives "
             "predictions for all 37 &alpha; values (10<super>&minus;8</super>&ndash;10<super>4</super>) "
@@ -142,11 +155,19 @@ story += [P("3. Approach", h1),
             "of the possible terms. The weight (1+|t|)<super>&gamma;/2</super> penalises high-order terms more "
             "than low-order ones, so the fit prefers smooth explanations. It is implemented by rescaling "
             "the columns of &Phi;, and &gamma;=0 gives ordinary Lasso."),
+          P("&bull; <b>Elastic net</b>, the same objective with the penalty "
+            "&lambda;[&rho;||c||<sub>1</sub> + &frac12;(1&minus;&rho;)||c||&sup2;] (same &gamma; weighting). "
+            "It sits between ridge (&rho;=0) and Lasso (&rho;=1) and is the usual remedy when correlated "
+            "terms make the Lasso pick among them erratically. &rho; &isin; {0.5, 0.9} was tried; small "
+            "&rho; behaves like ridge, which stage 1 already covers."),
           P("3.3 Model selection", h2),
           P("All hyper-parameters (degree d, penalty &alpha; or &lambda;, weight &gamma;) were chosen by 5-fold CV, "
             "repeated with two different random splits and averaged (seeded, fully reproducible). "
             "Stage 1 runs a ridge sweep over <i>every</i> degree to map the bias&ndash;variance curve. "
             "Stage 2 runs a Lasso grid over the most promising degrees and &gamma; &isin; {0,2,4,6}. "
+            "Stage 3 runs elastic net at the degrees and &gamma; values around the Lasso optimum. "
+            "Because a richer model family can win by chance, elastic net replaces the ridge/Lasso winner "
+            "only if its per-fold advantage (paired over the same 10 folds) exceeds one standard error. "
             "To account for the var1 shift, the selection score is an "
             "<b>importance-weighted CV MSE</b>. Each validation row with k clipped inputs gets weight "
             "w(k) = P<sub>test</sub>(k) / P<sub>train</sub>(k), so the CV error estimates the error on the "
@@ -171,7 +192,7 @@ for d, g in ((4, 6), (5, 0), (6, 6)):
     r = lasso("var1", d, g)
     v1_rows.append([f"lasso &gamma;={g}", d, "", f"{r['cv_mse']:.3f}", f"{r2('var1', r['cv_mse']):.3f}",
                     f"{r['cv_wmse']:.3f}"])
-v1_rows.append([f"<b>lasso &gamma;={b1['gamma']} (final)</b>", f"<b>{b1['degree']}</b>",
+v1_rows.append([f"<b>{mname(b1, True)} (final)</b>", f"<b>{b1['degree']}</b>",
                 f"{b1['n_terms']} ({b1['n_nonzero_terms']})", f"<b>{b1['cv_mse']:.3f}</b>",
                 f"<b>{r2('var1', b1['cv_mse']):.3f}</b>", f"<b>{b1['cv_wmse']:.3f}</b>"])
 
@@ -208,7 +229,7 @@ for d in (4, 6, 7, 8, 9, 10, 12, 14, 20):
     r = ridge("var2", d)
     v2_rows.append([f"ridge (&alpha;={r['alpha']:.0e})", d, r["n_terms"], f"{r['cv_mse']:.3f}",
                     f"{r2('var2', r['cv_mse']):.4f}", f"{r['train_mse_ols']:.3f}"])
-v2_rows.append([f"<b>lasso &gamma;={b2['gamma']} (final)</b>", f"<b>{b2['degree']}</b>",
+v2_rows.append([f"<b>{mname(b2, True)} (final)</b>", f"<b>{b2['degree']}</b>",
                 f"{b2['n_terms']} ({b2['n_nonzero_terms']})", f"<b>{b2['cv_mse']:.3f}</b>",
                 f"<b>{r2('var2', b2['cv_mse']):.4f}</b>", f"{b2['train_mse']:.3f} (penalised)"])
 story += [P("5. Problem var2 — thermal anomaly mapping (3 inputs, degree &le; 20)", h1),
@@ -225,48 +246,98 @@ story += [P("5. Problem var2 — thermal anomaly mapping (3 inputs, degree &le; 
             f"on the true complexity, not a target. With 1000 samples in 3-D, a degree-20 model has 1771 "
             f"coefficients, more than the number of points, and even heavy ridge regularisation leaves its "
             f"CV error 40 times worse."),
-          P(f"Ridge and Lasso are practically tied at degree 8 ({r2_8['cv_mse']:.3f} vs {b2['cv_mse']:.3f}). "
-            f"Their test predictions differ by a mean squared difference of only 0.004, so the choice "
-            f"between them is immaterial. The Lasso model was kept because it had the lowest CV score. "
-            f"It zeroes {b2['n_terms'] - b2['n_nonzero_terms']} of the {b2['n_terms']} terms."),
+          P(f"At degree 8 ridge, Lasso and elastic net are practically tied (CV MSE {r2_8['cv_mse']:.3f}, "
+            f"{lasso('var2', 8, 2)['cv_mse']:.3f} and {b2['cv_mse']:.3f}). The test predictions of the final "
+            f"model and the ridge model differ by a mean squared difference of only 0.004, so the choice "
+            f"between them is immaterial. The final model ({mname(b2)}) was kept because it had the "
+            f"lowest CV score and passed the one-standard-error test of Section 6. It is nearly dense: "
+            f"only {b2['n_terms'] - b2['n_nonzero_terms']} of the {b2['n_terms']} terms are zero, which fits "
+            f"a smooth field that genuinely uses almost every degree-8 term."),
           ]
 
 # ------------------------------------------------------------------ 6
-story += [KeepTogether([P("6. Final models and validation", h1),
+ev = {v: L[v]["enet_vs_best"] for v in L}
+NICE = {"lasso": "Lasso", "ridge": "ridge", "enet": "elastic net"}
+en_rows = [["", "model", "degree", "&gamma;", "&rho; (L1 share)", "&lambda;", "shift-weighted CV MSE"]]
+hl = []
+for v in ("var1", "var2"):
+    rr = min(L[v]["ridge"], key=lambda r: r["cv_wmse"])
+    en_rows.append([v, "best ridge", rr["degree"], "&ndash;", "0", f"{rr['alpha']:.1e}", f"{rr['cv_wmse']:.4f}"])
+    ll = best_of(v, "lasso")
+    en_rows.append(["", "best Lasso", ll["degree"], ll["gamma"], "1", f"{ll['lam']:.1e}", f"{ll['cv_wmse']:.4f}"])
+    for rho in (0.5, 0.9):
+        e = best_of(v, "enet", l1_ratio=rho)
+        en_rows.append(["", "best elastic net", e["degree"], e["gamma"], rho, f"{e['lam']:.1e}",
+                        f"{e['cv_wmse']:.4f}"])
+    g = ev[v]
+    hl.append(len(en_rows))
+    en_rows.append(["", f"<b>elastic net gain over {NICE[g['incumbent']['method']]}</b>", "", "", "", "",
+                    f"<b>{g['gain']:+.4f} &plusmn; {g['se']:.4f}</b> &rarr; "
+                    f"{'adopted' if g['adopted'] else 'not adopted'}"])
+
+
+def enet_verdict(v):
+    g = ev[v]
+    if g["adopted"]:
+        return (f"for {v} elastic net improves the shift-weighted CV MSE by {g['gain']:.4f}, more than one "
+                f"standard error ({g['se']:.4f}), so it was adopted")
+    if g["gain"] > 0:
+        return (f"for {v} elastic net is ahead by only {g['gain']:.4f}, within one standard error "
+                f"({g['se']:.4f}), so the simpler {NICE[g['incumbent']['method']]} model was kept")
+    return (f"for {v} elastic net does not beat the {NICE[g['incumbent']['method']]} model "
+            f"({g['gain']:+.4f} &plusmn; {g['se']:.4f}), so it was not adopted")
+
+
+story += [KeepTogether([P("6. Elastic net check", h1),
+          tbl(en_rows, [1.1 * cm, 4.6 * cm, 1.3 * cm, 1.0 * cm, 2.1 * cm, 1.6 * cm, 4.8 * cm], bold_rows=hl),
+          Spacer(1, 4),
+          P("Elastic net mixes the two penalties, so it was tested to make sure the choice between ridge "
+            "and Lasso was not leaving accuracy on the table. The last row of each block is the mean "
+            "per-fold improvement of the best elastic net over the selected ridge/Lasso model, &plusmn; one "
+            f"standard error. In short, {enet_verdict('var1')}; {enet_verdict('var2')}. "
+            "The pattern is plausible. var1's function is sparse (the Lasso zeroes two thirds of the "
+            "terms), so the L2 part only pulls in terms that should be absent. var2's field uses almost "
+            "every term, so a partly-L2 penalty that shrinks without zeroing suits it slightly better. "
+            "The var2 gain is small (under 1% of the error) and changes the test predictions by a mean "
+            "squared difference of only 0.002; the degree choice is unaffected either way.")])]
+
+story += [KeepTogether([P("7. Final models and validation", h1),
           fig("fig_parity.png", 15.5),
           P("<b>Figure 2.</b> Out-of-fold predictions of the final models against the actual values. "
             "No row is predicted by a model that saw it during training.", cap),
           tbl([["", "degree", "method", "penalty", "non-zero terms", "CV MSE", "CV R&sup2;", "train MSE"],
-               ["var1", b1["degree"], f"Lasso, &gamma;={b1['gamma']}", f"&lambda;={b1['lam']:.1e}",
+               ["var1", b1["degree"], mname(b1), f"&lambda;={b1['lam']:.1e}",
                 f"{b1['n_nonzero_terms']} / {b1['n_terms']}", f"{b1['cv_mse']:.3f}",
                 f"{r2('var1', b1['cv_mse']):.4f}", f"{b1['train_mse']:.3f}"],
-               ["var2", b2["degree"], f"Lasso, &gamma;={b2['gamma']}", f"&lambda;={b2['lam']:.1e}",
+               ["var2", b2["degree"], mname(b2), f"&lambda;={b2['lam']:.1e}",
                 f"{b2['n_nonzero_terms']} / {b2['n_terms']}", f"{b2['cv_mse']:.3f}",
                 f"{r2('var2', b2['cv_mse']):.4f}", f"{b2['train_mse']:.3f}"]],
-              [1.1 * cm, 1.3 * cm, 2.4 * cm, 2.2 * cm, 2.5 * cm, 1.7 * cm, 1.8 * cm, 1.8 * cm])]),
+              [1.0 * cm, 1.4 * cm, 3.6 * cm, 2.1 * cm, 2.2 * cm, 1.5 * cm, 1.6 * cm, 1.6 * cm])]),
           Spacer(1, 4),
           P("Each final model was refitted on all 1000 training rows with the selected hyper-parameters "
             "and used to predict the test rows. The predictions are in <b>BT2024154_pred_var1.csv</b> and "
             "<b>BT2024154_pred_var2.csv</b>, each a single column <i>y</i> with 1000 rows in the same order as "
             "the test files, matching the sample submission."),
-          P("7. Key decisions at a glance", h1),
+          P("8. Key decisions at a glance", h1),
           P("&bull; <b>CV over training error</b> for choosing the degree: training error always favours the "
             "highest degree (Figure 1)."),
           P("&bull; <b>Legendre basis</b>: the same polynomial space as monomials, but well conditioned, "
             "so degree 8&ndash;20 fits are numerically trustworthy."),
           P("&bull; <b>Regularisation</b>: needed once the number of terms approaches the number of samples. "
-            "The sparse, degree-weighted Lasso was the decisive improvement for var1."),
+            "The sparse, degree-weighted Lasso was the decisive improvement for var1. Elastic net was "
+            "tested as well and adopted only where it beat the winner by more than one standard error "
+            "(var2, by a small margin)."),
           P("&bull; <b>Shift-aware validation</b>: var1's test set is concentrated at clipped corners, so CV "
             "errors were re-weighted to match it, and the chosen model was checked to hold up there."),
           P("&bull; <b>Parsimony</b>: where several degrees tie within noise (var2: 8&ndash;10), the "
             "smallest was chosen."),
-          P("8. Reproducing the results", h1),
+          P("9. Reproducing the results", h1),
           P(f"Repository: <link href='{GITHUB}' color='blue'>{GITHUB}</link>. "
             "Run <font face='Courier'>pip install -r requirements.txt</font>, then "
             "<font face='Courier'>python code/train.py</font> (model selection and fitting, about 5 minutes on a "
             "laptop CPU), then <font face='Courier'>python code/predict.py</font> (writes the prediction files). "
-            "<font face='Courier'>code/polyreg.py</font> holds the feature construction, the ridge path, Lasso CV "
-            "and the final model class. Full CV logs are in <font face='Courier'>results/</font>.", left),
+            "<font face='Courier'>code/polyreg.py</font> holds the feature construction, the ridge path, Lasso and "
+            "elastic-net CV and the final model class. Full CV logs are in <font face='Courier'>results/</font>.", left),
           ]
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)

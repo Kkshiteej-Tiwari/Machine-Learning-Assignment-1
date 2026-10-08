@@ -128,7 +128,14 @@ def degree_scale(n_features, degree, gamma):
 def cv_lasso(X, y, degree, gamma, lambdas, folds, weights=None, basis="legendre"):
     """K-fold CV of Lasso polynomial regression along a lambda path.
     Returns (n_folds, n_lambdas) array of (optionally weighted) validation MSE."""
-    from sklearn.linear_model import lasso_path
+    return cv_enet(X, y, degree, gamma, 1.0, lambdas, folds, weights, basis)
+
+
+def cv_enet(X, y, degree, gamma, l1_ratio, lambdas, folds, weights=None, basis="legendre"):
+    """K-fold CV of elastic-net polynomial regression along a lambda path:
+    penalty lambda * (l1_ratio * |c|_1 + (1 - l1_ratio)/2 * |c|_2^2).
+    l1_ratio = 1 is the Lasso. Returns (n_folds, n_lambdas) validation MSE."""
+    from sklearn.linear_model import enet_path
     Phi = poly_features(X, degree, basis)[:, 1:] * degree_scale(X.shape[1], degree, gamma)
     out = np.empty((len(folds), len(lambdas)))
     for k, (tr, va) in enumerate(folds):
@@ -136,8 +143,8 @@ def cv_lasso(X, y, degree, gamma, lambdas, folds, weights=None, basis="legendre"
         A = Phi[tr] - mu
         # precomputed Gram matrix: ~100x faster coordinate descent when
         # the number of terms is comparable to the number of rows
-        _, C, _ = lasso_path(A, y[tr] - ym, alphas=lambdas, precompute=A.T @ A,
-                             max_iter=5000, tol=1e-4)
+        _, C, _ = enet_path(A, y[tr] - ym, l1_ratio=l1_ratio, alphas=lambdas,
+                            precompute=A.T @ A, max_iter=5000, tol=1e-4)
         P = ym + (Phi[va] - mu) @ C
         err = (P - y[va, None]) ** 2
         w = np.ones(len(va)) if weights is None else weights[va]
@@ -151,12 +158,15 @@ class PolyModel:
     terms phi_t of total degree <= `degree`.
 
     method="ridge": L2 penalty `lam`.   method="lasso": L1 penalty `lam`.
+    method="enet": elastic net, penalty `lam` split by `l1_ratio` (see cv_enet).
     `gamma` makes the penalty grow with the order of the term (see degree_scale).
     """
 
-    def __init__(self, degree, method="ridge", lam=1.0, gamma=0.0, basis="legendre"):
+    def __init__(self, degree, method="ridge", lam=1.0, gamma=0.0, basis="legendre",
+                 l1_ratio=1.0):
         self.degree, self.method, self.lam = degree, method, lam
         self.gamma, self.basis = gamma, basis
+        self.l1_ratio = 1.0 if method == "lasso" else l1_ratio
 
     def _design(self, X):
         Phi = poly_features(X, self.degree, self.basis)
@@ -169,12 +179,14 @@ class PolyModel:
         if self.method == "ridge":
             self.coef_ = RidgePath(Phi, y).coef(self.lam)
         else:
-            from sklearn.linear_model import Lasso
+            from sklearn.linear_model import ElasticNet
             A = Phi[:, 1:]
             mu, ym = A.mean(0), y.mean()
             A = A - mu
-            m = Lasso(alpha=self.lam, fit_intercept=False, precompute=A.T @ A,
-                      max_iter=100000, tol=1e-6)
+            # l1_ratio = 1 is exactly sklearn's Lasso
+            m = ElasticNet(alpha=self.lam, l1_ratio=getattr(self, "l1_ratio", 1.0),
+                           fit_intercept=False, precompute=A.T @ A,
+                           max_iter=100000, tol=1e-6)
             m.fit(A, y - ym)
             self.coef_ = np.concatenate([[ym - mu @ m.coef_], m.coef_])
         self.n_features_ = X.shape[1]
